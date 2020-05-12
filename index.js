@@ -378,55 +378,52 @@ function isBuildkitePublicArtifactUrl(url) {
 
 let autoMergePullRequestsBusy = false;
 let autoMergePullRequestsPending = false;
+
 async function onGithubStatusUpdate(payload) {
   log.info('onGithubStatusUpdate', payload);
 
-  // Rewrite buildkite URLs to make the buildkite logs read-accessible to everybody
-  // (temporary hack until buildkite supports public logs)
-  const {
-    context,
-    description,
-    name,
-    repository,
-    sha,
-    state,
-    target_url,
-  } = payload;
+  const prNumber = payload.number;
+  const repoName = payload.repository.full_name;
+  const user = payload.sender.login;
 
-  if (!PUBLIC_PIPELINE_REPOS.has(repository.full_name) && isBuildkitePublicLogUrl(target_url)) {
-    // Overwrite the buildkite status url with the public log equivalent
-    const new_target_url = envconst.PUBLIC_URL_ROOT + '/buildkite_public_log?' + target_url;
-    log.info('updating to', new_target_url);
-    const repo = githubClient.repo(name);
-    await repo.statusAsync(sha, {
-      state,
-      context,
-      description,
-      target_url: new_target_url,
-    });
-  } else {
-    log.info(`Ignoring non-buildkite URL: ${target_url}`);
+  const inWhitelist = await userInCiWhitelist(repoName, user);
+  if (!inWhitelist) {
+    log.info(`User ${user} is not in whitelist`);
+    return
   }
 
-  if (envconst.AUTOMERGE_ENABLED !== '') {
-    autoMergePullRequestsPending = true;
-    if (autoMergePullRequestsBusy) {
-      log.info('autoMergePullRequests busy');
-      return;
-    }
-    autoMergePullRequestsBusy = true;
-    while (autoMergePullRequestsPending) {
-      autoMergePullRequestsPending = false;
-      try {
-        // Check if any PRs in this repo should be merged, as unfortunately the status
-        // API provides no link from commit status to the corresponding pull request
-        await autoMergePullRequests(name);
-      } catch (err) {
-        log.error('autoMergePullRequests failed with:', err);
-      }
-    }
-    autoMergePullRequestsBusy = false;
+  const { target_url } = payload;
+  let re = new RegExp(`^https://buildkite.com/${envconst.BUILDKITE_ORG_SLUG}/([a-z|0-9|-]+)/builds/([0-9]+)$`)
+  const match = re.exec(target_url);
+  if (!match) {
+    log.info(`Target url ${target_url} did not match ${re}, ignoring`);
+    return;
   }
+
+  assert(match.index === 0);
+  assert(match.length === 3);
+
+  const pipelineName = match[1];
+  const buildNumber = Number(match[2]);
+  const pipeline = await buildkiteOrg.getPipelineAsync(pipelineName);
+  pipeline.getBuildAsync = promisify(pipeline.getBuild);
+
+  const build = await pipeline.getBuildAsync(buildNumber);
+  const job = build.jobs.find(j => j.data.label === "Code Reviewed");
+  if (!job) {
+    log.info("Could not find Code Reviewed job in jobs", build.jobs);
+    return;
+  }
+
+  if (job.data.state !== 'blocked') {
+    log.info(`job in state ${job.data.state}, nothing to do`, job);
+    return;
+  }
+
+  job.unblockAsync = promisify(job.unblock);
+
+  const unblockRes = await job.unblockAsync();
+  log.info("unblocked job with result: ", unblockRes);
 }
 
 async function onGithubPullRequestReview(payload) {

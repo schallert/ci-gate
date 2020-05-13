@@ -4,7 +4,7 @@ import WebhooksApi from '@octokit/webhooks';
 import createLogger from 'silk-log';
 import express from 'express';
 import github from 'octonode';
-import {promisify} from 'es6-promisify';
+import { promisify } from 'es6-promisify';
 import createBuildKiteClient from 'buildnode';
 import moment from 'moment';
 
@@ -81,7 +81,7 @@ const envconst = {
      Whether or not to automatically merge PRs after tests pass that have
      the `automerge` label applied
   */
-  AUTOMERGE_ENABLED: ''
+  AUTOMERGE_ENABLED: '',
 };
 
 for (const v in envconst) {
@@ -91,14 +91,14 @@ for (const v in envconst) {
   }
 }
 
-const PUBLIC_PIPELINE_REPOS = new Set(envconst.PUBLIC_PIPELINE_REPOS.split(','));
 const githubClient = github.client(envconst.GITHUB_TOKEN);
 const buildkiteClient = createBuildKiteClient({
-  accessToken: envconst.BUILDKITE_TOKEN
+  accessToken: envconst.BUILDKITE_TOKEN,
 });
-buildkiteClient.getOrganizationAsync = promisify(buildkiteClient.getOrganization);
+buildkiteClient.getOrganizationAsync = promisify(
+  buildkiteClient.getOrganization
+);
 let buildkiteOrg;
-
 
 async function triggerPullRequestCI(repoName, prNumber, prInfo) {
   const repo = githubClient.repo(repoName);
@@ -109,9 +109,9 @@ async function triggerPullRequestCI(repoName, prNumber, prInfo) {
 
   if (await prHasLabel(repoName, prNumber, NOCI_LABEL)) {
     await repo.statusAsync(commit, {
-      'state': 'failure',
-      'context': STATUS_CONTEXT,
-      'description': `Remove ${NOCI_LABEL} label to continue`,
+      state: 'failure',
+      context: STATUS_CONTEXT,
+      description: `Remove ${NOCI_LABEL} label to continue`,
     });
     return;
   }
@@ -122,7 +122,7 @@ async function triggerPullRequestCI(repoName, prNumber, prInfo) {
   const pull_request_repository = prInfo.head.repo.clone_url;
   const pull_request_base_branch = prInfo.base.ref;
   const prFiles = await pr.filesAsync();
-  const prFilenames = prFiles[0].map(f => f.filename);
+  const prFilenames = prFiles[0].map((f) => f.filename);
   const affected_files = prFilenames.join(':');
   log.info(`files affected by this PR: ${affected_files}`);
 
@@ -158,14 +158,11 @@ async function triggerPullRequestCI(repoName, prNumber, prInfo) {
     log.info('createBuild result:', newBuild);
   }
 
-  await repo.statusAsync(
-    commit,
-    {
-      state: 'success',
-      context: STATUS_CONTEXT,
-      description,
-    }
-  );
+  await repo.statusAsync(commit, {
+    state: 'success',
+    context: STATUS_CONTEXT,
+    description,
+  });
 
   await prRemoveLabel(repoName, prNumber, CI_LABEL);
 }
@@ -200,15 +197,18 @@ async function handleCommitsPushedToPullRequest(repoName, prNumber) {
   const repo = githubClient.repo(repoName);
   const issue = repo.issue(prNumber);
 
-  if (!await prHasLabel(repoName, prNumber, AUTOMERGE_LABEL)) {
-    log.debug(`handleCommitsPushedToPullRequest: ${AUTOMERGE_LABEL} label is not set`);
+  if (!(await prHasLabel(repoName, prNumber, AUTOMERGE_LABEL))) {
+    log.debug(
+      `handleCommitsPushedToPullRequest: ${AUTOMERGE_LABEL} label is not set`
+    );
     return;
   }
 
   if (await prRemoveLabel(repoName, prNumber, AUTOMERGE_LABEL)) {
-    const body = ':scream: New commits were pushed while the automerge label was present.';
+    const body =
+      ':scream: New commits were pushed while the automerge label was present.';
     log.info(body);
-    await issue.createCommentAsync({body});
+    await issue.createCommentAsync({ body });
   }
 }
 
@@ -218,13 +218,13 @@ async function autoMergePullRequest(repoName, prNumber) {
   const issue = repo.issue(prNumber);
   const info = await pr.infoAsync();
   assert(typeof info === 'object');
-  const {state, mergeable, head} = info[0];
+  const { state, mergeable, head } = info[0];
 
   if (state !== 'open') {
     return;
   }
 
-  if (!await prHasLabel(repoName, prNumber, AUTOMERGE_LABEL)) {
+  if (!(await prHasLabel(repoName, prNumber, AUTOMERGE_LABEL))) {
     log.debug(`autoMergePullRequest: ${AUTOMERGE_LABEL} label is not set`);
     return;
   }
@@ -239,7 +239,7 @@ async function autoMergePullRequest(repoName, prNumber) {
     if (await prRemoveLabel(repoName, prNumber, AUTOMERGE_LABEL)) {
       const body = ':broken_heart: Unable to automerge due to merge conflict';
       log.info(body);
-      await issue.createCommentAsync({body});
+      await issue.createCommentAsync({ body });
     }
     return;
   }
@@ -247,62 +247,38 @@ async function autoMergePullRequest(repoName, prNumber) {
   // Check the CI status of the head SHA
   log.debug(`fetching CI status for head SHA ${head.sha}`);
   const status = (await repo.combinedStatusAsync(head.sha))[0];
-  log.info(`CI status: ${status.state} with ${status.statuses.length} statuses`);
+  log.info(
+    `CI status: ${status.state} with ${status.statuses.length} statuses`
+  );
   log.debug('All statuses:', status.statuses);
 
   switch (status.state) {
-  case 'success':
-  {
-    if (status.statuses.length < 2) {
-      log.warn(`Refusing to automerge with no evidence of success`);
-    } else {
-      log.info(`CI status is success, trying to merge...`);
-      const mergeResult = await pr.mergeAsync({
-        sha: head.sha,
-        commit_message: 'automerge',
-        merge_method: 'rebase',
-      });
-      log.info(`successfully merged`, mergeResult);
-    }
-    break;
-  }
-
-  case 'failure':
-  {
-    if (await prRemoveLabel(repoName, prNumber, AUTOMERGE_LABEL)) {
-      const body = ':broken_heart: Unable to automerge due to CI failure';
-      log.info(body);
-      await issue.createCommentAsync({body});
-    }
-    break;
-  }
-
-  default:
-    break;
-  }
-}
-
-async function autoMergePullRequests(repoName) {
-  log.info(`autoMergePullRequests for ${repoName}...`);
-
-  const openPrs = await new Promise((resolve, reject) => {
-    const repo = githubClient.repo(repoName);
-    repo.prs((err, pulls) => {
-      if (err) {
-        reject(err);
-        return;
+    case 'success': {
+      if (status.statuses.length < 2) {
+        log.warn(`Refusing to automerge with no evidence of success`);
+      } else {
+        log.info(`CI status is success, trying to merge...`);
+        const mergeResult = await pr.mergeAsync({
+          sha: head.sha,
+          commit_message: 'automerge',
+          merge_method: 'rebase',
+        });
+        log.info(`successfully merged`, mergeResult);
       }
-      resolve(
-        pulls.filter((pull) => {
-          return pull.state === 'open';
-        })
-      );
-    });
-  });
+      break;
+    }
 
-  for (let openPr of openPrs) {
-    log.info(`Processing #${openPr.number} ${openPr.title}`);
-    await autoMergePullRequest(repoName, openPr.number);
+    case 'failure': {
+      if (await prRemoveLabel(repoName, prNumber, AUTOMERGE_LABEL)) {
+        const body = ':broken_heart: Unable to automerge due to CI failure';
+        log.info(body);
+        await issue.createCommentAsync({ body });
+      }
+      break;
+    }
+
+    default:
+      break;
   }
 }
 
@@ -327,7 +303,7 @@ async function prRemoveLabel(repoName, prNumber, labelName) {
 }
 
 function isBuildkitePublicLogUrl(url) {
-  if (typeof(url) !== 'string') {
+  if (typeof url !== 'string') {
     return false;
   }
 
@@ -337,7 +313,9 @@ function isBuildkitePublicLogUrl(url) {
   }
 
   const buildInfo = url.slice(orgUrlPrefix.length);
-  const reMatch = buildInfo.match(/^([a-z-]+)\/builds\/([1-9[0-9]+|latest\/[a-z]+)$/);
+  const reMatch = buildInfo.match(
+    /^([a-z-]+)\/builds\/([1-9[0-9]+|latest\/[a-z]+)$/
+  );
   if (!reMatch) {
     return false;
   }
@@ -345,12 +323,14 @@ function isBuildkitePublicLogUrl(url) {
   assert(reMatch.length === 3);
 
   const pipeline = reMatch[1];
-  const buildNumber = reMatch[2].startsWith('latest/') ? reMatch[2].substr(7) : Number(reMatch[2]);
-  return {pipeline, buildNumber};
+  const buildNumber = reMatch[2].startsWith('latest/')
+    ? reMatch[2].substr(7)
+    : Number(reMatch[2]);
+  return { pipeline, buildNumber };
 }
 
 function isBuildkitePublicArtifactUrl(url) {
-  if (typeof(url) !== 'string') {
+  if (typeof url !== 'string') {
     return false;
   }
 
@@ -373,27 +353,25 @@ function isBuildkitePublicArtifactUrl(url) {
   const buildNumber = Number(reMatch[2]);
   const jobId = reMatch[3];
   const artifactId = reMatch[4];
-  return {pipeline, buildNumber, jobId, artifactId};
+  return { pipeline, buildNumber, jobId, artifactId };
 }
-
-let autoMergePullRequestsBusy = false;
-let autoMergePullRequestsPending = false;
 
 async function onGithubStatusUpdate(payload) {
   log.info('onGithubStatusUpdate', payload);
 
-  const prNumber = payload.number;
   const repoName = payload.repository.full_name;
   const user = payload.sender.login;
 
   const inWhitelist = await userInCiWhitelist(repoName, user);
   if (!inWhitelist) {
     log.info(`User ${user} is not in whitelist`);
-    return
+    return;
   }
 
   const { target_url } = payload;
-  let re = new RegExp(`^https://buildkite.com/${envconst.BUILDKITE_ORG_SLUG}/([a-z|0-9|-]+)/builds/([0-9]+)$`)
+  let re = new RegExp(
+    `^https://buildkite.com/${envconst.BUILDKITE_ORG_SLUG}/([a-z|0-9|-]+)/builds/([0-9]+)$`
+  );
   const match = re.exec(target_url);
   if (!match) {
     log.info(`Target url ${target_url} did not match ${re}, ignoring`);
@@ -409,9 +387,9 @@ async function onGithubStatusUpdate(payload) {
   pipeline.getBuildAsync = promisify(pipeline.getBuild);
 
   const build = await pipeline.getBuildAsync(buildNumber);
-  const job = build.jobs.find(j => j.data.label === "Code Reviewed");
+  const job = build.jobs.find((j) => j.data.label === 'Code Reviewed');
   if (!job) {
-    log.info("Could not find Code Reviewed job in jobs", build.jobs);
+    log.info('Could not find Code Reviewed job in jobs', build.jobs);
     return;
   }
 
@@ -423,62 +401,65 @@ async function onGithubStatusUpdate(payload) {
   job.unblockAsync = promisify(job.unblock);
 
   const unblockRes = await job.unblockAsync();
-  log.info("unblocked job with result: ", unblockRes);
+  log.info('unblocked job with result: ', unblockRes);
 }
 
 async function onGithubPullRequestReview(payload) {
-  const {action, review, pull_request} = payload;
+  const { action, review, pull_request } = payload;
   const prNumber = pull_request.number;
   const repoName = pull_request.head.repo.full_name;
 
-  log.info(`onGithubPullRequestReview ${action} on ${repoName}#{prNumber}`, review);
+  log.info(
+    `onGithubPullRequestReview ${action} on ${repoName}#{prNumber}`,
+    review
+  );
   await autoMergePullRequest(repoName, prNumber);
 }
-
 
 async function onGithubPullRequest(payload) {
   const prNumber = payload.number;
   const repoName = payload.repository.full_name;
   const user = payload.sender.login;
-  const {pull_request} = payload;
+  const { pull_request } = payload;
   const headSha = pull_request.head.sha;
   const merged = pull_request.merged;
   const repo = githubClient.repo(repoName);
 
   log.info(payload.action, headSha, prNumber, repoName);
   switch (payload.action) {
-  case 'synchronize':
-    handleCommitsPushedToPullRequest(repoName, prNumber);
+    case 'synchronize':
+      handleCommitsPushedToPullRequest(repoName, prNumber);
     //fall through
-  case 'opened':
-  case 'reopened':
-  {
-    await prRemoveLabel(repoName, prNumber, CI_LABEL);
+    case 'opened':
+    case 'reopened': {
+      await prRemoveLabel(repoName, prNumber, CI_LABEL);
 
-    if (await userInCiWhitelist(repoName, user)) {
-      await triggerPullRequestCI(repoName, prNumber, pull_request);
-    } else {
-      await repo.statusAsync(headSha, {
-        'state': 'pending',
-        'context': STATUS_CONTEXT,
-        'description': `A project member must add the '${CI_LABEL}' label for tests to start`,
-      });
-    }
-    break;
-  }
-  case 'labeled':
-  {
-    const [hasLabel, inWhitelist] = await Promise.all([prHasLabel(repoName, prNumber, CI_LABEL), userInCiWhitelist(repoName, user)]);
-    if (!merged) {
-      if (hasLabel || inWhitelist) {
+      if (await userInCiWhitelist(repoName, user)) {
         await triggerPullRequestCI(repoName, prNumber, pull_request);
+      } else {
+        await repo.statusAsync(headSha, {
+          state: 'pending',
+          context: STATUS_CONTEXT,
+          description: `A project member must add the '${CI_LABEL}' label for tests to start`,
+        });
       }
-      await autoMergePullRequest(repoName, prNumber);
+      break;
     }
-    break;
-  }
-  default:
-    log.info('Ignored pull request action:', payload.action);
+    case 'labeled': {
+      const [hasLabel, inWhitelist] = await Promise.all([
+        prHasLabel(repoName, prNumber, CI_LABEL),
+        userInCiWhitelist(repoName, user),
+      ]);
+      if (!merged) {
+        if (hasLabel || inWhitelist) {
+          await triggerPullRequestCI(repoName, prNumber, pull_request);
+        }
+        await autoMergePullRequest(repoName, prNumber);
+      }
+      break;
+    }
+    default:
+      log.info('Ignored pull request action:', payload.action);
   }
 }
 
@@ -487,15 +468,15 @@ async function onGithubPing(payload) {
   await Promise.resolve(); // pacify eslint
 }
 
-async function onGithub({id, name, payload}) {
+async function onGithub({ id, name, payload }) {
   try {
     log.debug('Github webhook:', name, id);
     log.verbose(payload);
     const hooks = {
-      'ping': onGithubPing,
-      'pull_request': onGithubPullRequest,
-      'status': onGithubStatusUpdate,
-      'pull_request_review': onGithubPullRequestReview,
+      ping: onGithubPing,
+      pull_request: onGithubPullRequest,
+      status: onGithubStatusUpdate,
+      pull_request_review: onGithubPullRequestReview,
     };
     if (hooks[name]) {
       await hooks[name](payload);
@@ -509,15 +490,15 @@ async function onGithub({id, name, payload}) {
 
 function buildkiteActiveState(state) {
   switch (state) {
-  case 'canceling':
-  case 'canceled':
-  case 'failed':
-  case 'passed':
-  case 'timed_out':
-  case 'waiting_failed':
-    return false;
-  default:
-    return true;
+    case 'canceling':
+    case 'canceled':
+    case 'failed':
+    case 'passed':
+    case 'timed_out':
+    case 'waiting_failed':
+      return false;
+    default:
+      return true;
   }
 }
 
@@ -548,67 +529,61 @@ function buildkiteHumanTimeInfo(buildData) {
 
   let description = '';
   switch (buildData.state) {
-  case 'scheduled':
-  case 'waiting':
-  case 'assigned':
-  case 'accepted':
-  {
-    assert(typeof buildData.scheduled_at === 'string');
-    const scheduledTime = moment.utc(buildData.scheduled_at);
-    scheduledTime.local();
-    description = 'waiting since ' + scheduledTime.format('HH:mm:ss on dddd');
-    break;
-  }
-  case 'blocked':
-  {
-    description = 'blocked';
-    break;
-  }
-  case 'timed_out':
-  {
-    description = 'timed out';
-    break;
-  }
-  case 'waiting_failed':
-  case 'canceling':
-  case 'canceled':
-  {
-    description = 'aborted';
-    break;
-  }
-  case 'running':
-  {
-    assert(typeof buildData.scheduled_at === 'string');
-    assert(typeof buildData.started_at === 'string');
-    const startedTime = moment.utc(buildData.started_at);
-    startedTime.local();
-    description = 'running since ' + startedTime.format('HH:mm:ss on dddd');
-    break;
-  }
-  case 'failed':
-  case 'passed':
-  {
-    assert(typeof buildData.scheduled_at === 'string');
-    assert(typeof buildData.started_at === 'string');
-    assert(typeof buildData.finished_at === 'string');
-    const scheduledTime = moment.utc(buildData.scheduled_at);
-    const startedTime = moment.utc(buildData.started_at);
-    const finishedTime = moment.utc(buildData.finished_at);
-
-    scheduledTime.local();
-    startedTime.local();
-    finishedTime.local();
-    const runDuration = moment.duration(finishedTime.diff(startedTime));
-    const waitDuration = moment.duration(startedTime.diff(scheduledTime));
-
-    description = 'ran for ' + runDuration.humanize();
-    if (waitDuration.minutes() > 0) {
-      description += ', queued for ' + waitDuration.humanize();
+    case 'scheduled':
+    case 'waiting':
+    case 'assigned':
+    case 'accepted': {
+      assert(typeof buildData.scheduled_at === 'string');
+      const scheduledTime = moment.utc(buildData.scheduled_at);
+      scheduledTime.local();
+      description = 'waiting since ' + scheduledTime.format('HH:mm:ss on dddd');
+      break;
     }
-    break;
-  }
-  default:
-    throw new Error(`Unknown state: ${buildData.state}`);
+    case 'blocked': {
+      description = 'blocked';
+      break;
+    }
+    case 'timed_out': {
+      description = 'timed out';
+      break;
+    }
+    case 'waiting_failed':
+    case 'canceling':
+    case 'canceled': {
+      description = 'aborted';
+      break;
+    }
+    case 'running': {
+      assert(typeof buildData.scheduled_at === 'string');
+      assert(typeof buildData.started_at === 'string');
+      const startedTime = moment.utc(buildData.started_at);
+      startedTime.local();
+      description = 'running since ' + startedTime.format('HH:mm:ss on dddd');
+      break;
+    }
+    case 'failed':
+    case 'passed': {
+      assert(typeof buildData.scheduled_at === 'string');
+      assert(typeof buildData.started_at === 'string');
+      assert(typeof buildData.finished_at === 'string');
+      const scheduledTime = moment.utc(buildData.scheduled_at);
+      const startedTime = moment.utc(buildData.started_at);
+      const finishedTime = moment.utc(buildData.finished_at);
+
+      scheduledTime.local();
+      startedTime.local();
+      finishedTime.local();
+      const runDuration = moment.duration(finishedTime.diff(startedTime));
+      const waitDuration = moment.duration(startedTime.diff(scheduledTime));
+
+      description = 'ran for ' + runDuration.humanize();
+      if (waitDuration.minutes() > 0) {
+        description += ', queued for ' + waitDuration.humanize();
+      }
+      break;
+    }
+    default:
+      throw new Error(`Unknown state: ${buildData.state}`);
   }
   return description;
 }
@@ -616,7 +591,7 @@ function buildkiteHumanTimeInfo(buildData) {
 async function onBuildKitePublicLogRequest(req, res) {
   res.set('Content-Type', 'text/html');
   const queryIndex = req.originalUrl.indexOf('?');
-  const url = (queryIndex >= 0) ? req.originalUrl.slice(queryIndex + 1) : '';
+  const url = queryIndex >= 0 ? req.originalUrl.slice(queryIndex + 1) : '';
   const buildInfo = isBuildkitePublicLogUrl(url);
   if (!buildInfo) {
     log.warn(`Invalid public log url:`, url);
@@ -635,15 +610,13 @@ async function onBuildKitePublicLogRequest(req, res) {
 
   // TODO: Add pagination support for older builds
   const builds = await pipeline.listBuildsAsync();
-  const build = builds.find(
-    (build) => {
-      if (typeof buildInfo.buildNumber === 'string') {
-        return build.branch === buildInfo.buildNumber;
-      } else {
-        return build.number === buildInfo.buildNumber;
-      }
+  const build = builds.find((build) => {
+    if (typeof buildInfo.buildNumber === 'string') {
+      return build.branch === buildInfo.buildNumber;
+    } else {
+      return build.number === buildInfo.buildNumber;
     }
-  );
+  });
 
   if (!build) {
     let msg = `Build ${buildInfo.buildNumber} not found, try <a href="${url}">here</a> instead.`;
@@ -655,10 +628,10 @@ async function onBuildKitePublicLogRequest(req, res) {
     return;
   }
 
-  const {provider} = build.data.pipeline;
+  const { provider } = build.data.pipeline;
   let branchHtml = build.branch;
   if (provider.id === 'github') {
-    const {repository} = provider.settings;
+    const { repository } = provider.settings;
 
     const prMatch = build.branch.match(/^pull\/([1-9[0-9]+)\/head$/);
     if (prMatch) {
@@ -723,7 +696,10 @@ async function onBuildKitePublicLogRequest(req, res) {
 
       let jobLog = '<br><i>Build log not available</i><br>';
       let artifacts;
-      if (envconst.BUILDKITE_EXPOSE_ALL_JOB_LOGS || job.name.includes('[public]')) {
+      if (
+        envconst.BUILDKITE_EXPOSE_ALL_JOB_LOGS ||
+        job.name.includes('[public]')
+      ) {
         const html = await job.getLogHtmlAsync();
         if (html) {
           jobLog = `<div class="term-container">${html}</div>`;
@@ -733,11 +709,15 @@ async function onBuildKitePublicLogRequest(req, res) {
         const jobArtifacts = await job.listArtifactsAsync();
 
         if (jobArtifacts.length > 0) {
-          artifacts = jobArtifacts.map(a => {
-            const url = envconst.PUBLIC_URL_ROOT + '/buildkite_public_artifact?' +
-              `https://api.buildkite.com/v2/organizations/${envconst.BUILDKITE_ORG_SLUG}/pipelines/${buildInfo.pipeline}/builds/${build.number}/jobs/${a.jobId}/artifacts/${a.id}/download`;
-            return `<li><a href="${url}" target="_blank">${a.path}</a> (${a.size} bytes)</li>`;
-          }).join('');
+          artifacts = jobArtifacts
+            .map((a) => {
+              const url =
+                envconst.PUBLIC_URL_ROOT +
+                '/buildkite_public_artifact?' +
+                `https://api.buildkite.com/v2/organizations/${envconst.BUILDKITE_ORG_SLUG}/pipelines/${buildInfo.pipeline}/builds/${build.number}/jobs/${a.jobId}/artifacts/${a.id}/download`;
+              return `<li><a href="${url}" target="_blank">${a.path}</a> (${a.size} bytes)</li>`;
+            })
+            .join('');
           artifacts = `<ul>${artifacts}</ul>`;
         }
       }
@@ -800,7 +780,7 @@ async function onBuildKitePublicLogRequest(req, res) {
 
 async function onBuildKitePublicArtifactRequest(req, res) {
   const queryIndex = req.originalUrl.indexOf('?');
-  const url = (queryIndex >= 0) ? req.originalUrl.slice(queryIndex + 1) : '';
+  const url = queryIndex >= 0 ? req.originalUrl.slice(queryIndex + 1) : '';
 
   const buildInfo = isBuildkitePublicArtifactUrl(url);
   if (!buildInfo) {
@@ -820,26 +800,28 @@ async function onBuildKitePublicArtifactRequest(req, res) {
   const build = await pipeline.getBuildAsync(buildInfo.buildNumber);
   build.getArtifactAsync = promisify(build.getArtifact);
 
-  const job = build.jobs.find(j => j.id === buildInfo.jobId);
+  const job = build.jobs.find((j) => j.id === buildInfo.jobId);
 
   job.listArtifactsAsync = promisify(job.listArtifacts);
   const jobArtifacts = await job.listArtifactsAsync();
 
-  const artifact = jobArtifacts.find(a => a.id === buildInfo.artifactId);
+  const artifact = jobArtifacts.find((a) => a.id === buildInfo.artifactId);
   artifact.getDownloadUrlAsync = promisify(artifact.getDownloadUrl);
 
   const artifactUrl = await artifact.getDownloadUrlAsync();
 
   log.info('Emitting artifact for', url);
   res.writeHead(302, {
-    'Location': artifactUrl
+    Location: artifactUrl,
   });
   res.end();
 }
 
 async function main() {
   try {
-    buildkiteOrg = await buildkiteClient.getOrganizationAsync(envconst.BUILDKITE_ORG_SLUG);
+    buildkiteOrg = await buildkiteClient.getOrganizationAsync(
+      envconst.BUILDKITE_ORG_SLUG
+    );
     buildkiteOrg.getPipelineAsync = promisify(buildkiteOrg.getPipeline);
 
     const webhooks = new WebhooksApi({

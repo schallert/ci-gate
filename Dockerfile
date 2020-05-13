@@ -1,8 +1,10 @@
-FROM node:9-alpine
+FROM node:13-alpine
 
 ADD . /src
 WORKDIR /src
-RUN npm install
+RUN apk add --no-cache ca-certificates bash curl patch && npm install --unsafe-perm
 
-ENTRYPOINT [ "npm" ]
-CMD [ "run", "start" ]
+COPY --from=gcr.io/berglas/berglas:latest /bin/berglas /bin/berglas
+
+ENTRYPOINT ["/bin/berglas", "exec", "--"]
+CMD ["npm", "run", "start"]
